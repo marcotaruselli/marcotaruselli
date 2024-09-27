@@ -1,0 +1,1411 @@
+function MASW_MAIN_Attive(data_processing)
+% global utilities
+global mainMASWFig
+global MASW
+% global dataforPlotVideoCrossCorr
+
+%% Controlli iniziali
+% 1) Prima di applicare la funzione controlla che qualche segnale sia stato selezionato!
+if logical(evalin('base','~exist(''selected'')')) % Se non sono stati selezionati termina la funzione con questo messaggio di errore
+    beep
+    msgbox('No data have been selected! Please select data from "Signal for processing" list!','Update','error');
+    return
+else
+    selected = evalin('base','selected'); % Se esiste carica la variabile selected dal base-workspace
+end
+
+% 2) Seleziono i dati selezionati dalla tabella in MainPassive
+data_selected = data_processing(selected,1); %Dati selezionati da tabella "Signal for processing"
+MASW.data_selected = data_selected;
+
+% 2.1) Check if the selected signals have the same component
+if ~isequal(data_selected(1).Comp, data_selected(2:end).Comp)
+    beep
+    waitfor(msgbox({'Same components MUST be selected!'},'Update','error'))
+    return
+end
+
+% 2.2) Check if the signals have the same time length
+for i = 2:size(data_selected,1)
+    if ~isequal(length(data_selected(1).signal),length(data_selected(i).signal))
+        beep
+        waitfor(msgbox({'The selected signals must have the same length!'; 'Cut them before proceeding!'},'Update','error'))
+        return
+    end
+end
+
+% 2.3) Check if two different stations have been selected
+if isequal(data_selected(1).stn, data_selected(2:end).stn)
+    beep
+    waitfor(msgbox({'You MUST select signals which belong to different stations!'},'Update','error'))
+    return
+end
+
+% 2.4) Check if the selected signals have the same Fs
+data_selectedFS = extractfield(data_selected,'fs');
+if not(all(unique(data_selected(1).fs == data_selectedFS)))
+    beep
+    waitfor(msgbox({'The signals MUST have the same sampling frequency!'},'Update','error'))
+    return
+end
+
+%% SIGNALS INFO ------------------------------------------------
+mainMASWFig = figure('units','normalized','outerposition',[0 0 1 1],'WindowState','maximized','toolbar','none','MenuBar','none',...
+    'numbertitle','off','name','MULTICHANNEL ANALYSIS OF SURFACE WAVES');
+
+% Disegno riquadri
+annotation(mainMASWFig,'line',[0.13 0.995],[0.99 0.99],'Color',[0.6,0.6,0.6],'LineWidth',0.001,'Units','normalized'); % Riga sopra orizzontale
+annotation(mainMASWFig,'line',[0.13 0.13],[0.007 0.99],'Color',[0.6,0.6,0.6],'LineWidth',0.001,'Units','normalized'); % Riga sx verticale
+annotation(mainMASWFig,'line',[0.995 0.995],[0.007 0.99],'Color',[0.6,0.6,0.6],'LineWidth',0.001,'Units','normalized'); % Riga dx verticale
+annotation(mainMASWFig,'line',[0.13 0.995],[0.007 0.007],'Color',[0.6,0.6,0.6],'LineWidth',0.001,'Units','normalized'); % Riga sotto orizzontale
+annotation(mainMASWFig,'line',[0.527 0.527],[0.007 0.99],'Color',[0.6,0.6,0.6],'LineWidth',0.001,'Units','normalized'); % Riga dx verticale
+% annotation(mainMASWFig,'line',[0.527 0.995],[0.485 0.485],'Color',[0.6,0.6,0.6],'LineWidth',0.001,'Units','normalized'); % Riga dx verticale
+
+
+% Stations ------------------------------------------------
+uicontrol(mainMASWFig,'style','text','units','normalized','position',[.006 .96 .118 .0285],...
+    'string','Stations position','horizontalalignment','left','fontunits','normalized','fontsize',.6,'fontweight','bold',...
+    'backgroundcolor',[0/255 255/255 255/255]);
+annotation(mainMASWFig,'rectangle','Units','normalized','Position',[.005 .96 .119 .03],'FaceColor','none','Color',[0.6 0.6 0.6])
+
+% Coordinate system
+uicontrol('style','text','units','normalized','position',[.005 .9265 .06 .03],'Enable','on',...
+    'string','Coordinate sys.','horizontalalignment','left','fontunits','normalized','fontsize',.5,...
+    'backgroundcolor',[.8 .8 .8]);
+uicontrol('style','popupmenu','units','normalized','position',[.065 .9225 .06 .034],'Enable','on',...
+    'string',{'Cartesian','Geographical'},'horizontalalignment','left','fontunits','normalized','fontsize',.5,...
+    'Tag','coordSystemMASW','Tooltip',['If Geographical is selected you may set LAT and LONG either in degree or in decimal format' 10 ...
+    'es. decimal ==> 10.633379  | degree ==>  46°58''34.60"'] );
+
+
+% Crea tabella stazioni + coordinate
+TableSelectedStations(data_processing)  %Posizione tabella ==> [.005 .785 .12 .1706]
+
+% Button load
+uicontrol(mainMASWFig,'style','pushbutton','units','normalized','position',[.005 .7515-0.0335 .06 .03],...
+    'string','Load coord.','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+    'backgroundcolor',[.7 .7 .7],'Tag','LoadCoord','Callback',@(numfld,event) LoadCoordinates);
+
+% Button save
+uicontrol(mainMASWFig,'style','pushbutton','units','normalized','position',[.065 .7515-0.0335 .06 .03],...
+    'string','Save coord.','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+    'backgroundcolor',[.7 .7 .7],'Tag','SaveCoord','Enable','off','Callback',@(numfld,event) SaveCoordinates);
+
+% Button Compute the vector containing the position of traces
+uicontrol(mainMASWFig,'style','pushbutton','units','normalized','position',[.005 .718-0.0335 .12 .03],...
+    'string','Compute position of traces','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+    'backgroundcolor',[.7 .7 .7],'Tag','statVectorDistances','Enable','off','Callback',@(numfld,event) positionSensorsVector,...
+    'Tooltip','By clicking this button you compute the vector of traces '' position in mts');
+
+
+%% Surface-waves analysis parameters --------------------------------------------------------
+% uicontrol(mainMASWFig,'style','text','units','normalized','position',[.006 0.4378-0.0335 .118 .0285],...
+%     'string','Cross-Correlation setting','horizontalalignment','left','fontunits','normalized','fontsize',.6,'fontweight','bold',...
+%     'backgroundcolor',[230/255 237/255 130/255]);
+% annotation(mainMASWFig,'rectangle','Units','normalized','Position',[.005 0.4380-0.0335 .119 .03],'FaceColor','none','Color',[0.6 0.6 0.6])
+
+% % Time-length signals
+% uicontrol(mainMASWFig,'style','text','units','normalized','position',[.005 .3688 .07 .03],...
+%     'string','Time length [m]','horizontalalignment','left','fontunits','normalized','fontsize',.5,...
+%     'backgroundcolor',[.8 .8 .8],'Enable','off','tag','String_timelength_PP');
+% uicontrol(mainMASWFig,'style','edit','units','normalized','position',[.075 .3688 .05 .03],...
+%     'backgroundcolor',[1 1 1],'horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+%     'tag','timelength_PP','Enable','off',...
+%     'tooltipstring',['Select the signals time-length to compute the cross-correlation. Time in minutes' 10 ...
+%     'If the chosen length does not return null reminder, a first part of the signal will be discarded.']);
+%
+% % Maxlag
+% uicontrol('style','text','units','normalized','position',[.005 .3368 .07 .03],...
+%     'string','Maxlag [s]','horizontalalignment','left','fontunits','normalized','fontsize',.5,...
+%     'backgroundcolor',[.8 .8 .8],'Enable','off','tag','String_maxlag_PP');
+% uicontrol('style','edit','units','normalized','position',[.075 .3368 .05 .03],...
+%     'backgroundcolor',[1 1 1],'String',10,'horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+%     'tag','maxlag_PP','Enable','off',...
+%     'tooltipstring','Express maxlag in second. The code will convert it in samples.');
+%
+% % Whitening
+% uicontrol('style','text','units','normalized','position',[.005 .3048 .07 .03],...
+%     'string','Whitening','horizontalalignment','left','fontunits','normalized','fontsize',.5,...
+%     'backgroundcolor',[.8 .8 .8],'Enable','off','Tag','String_whitening_PP');
+% uicontrol('style','checkbox','units','normalized','position',[.090 .3048 .03 .03],'String','yes',...
+%     'horizontalalignment','left','fontunits','normalized','fontsize',.5,...
+%     'Tag','whitening_PP','Enable','off',...
+%     'Value',1,'tooltipstring','If selected the signals will be whitened');
+%
+% % Avarage cross-corr belonging to station pairs with same distance
+% uicontrol('style','text','units','normalized','position',[.005 .2728 .07 .03],...
+%     'string','Average Cross-corr','horizontalalignment','left','fontunits','normalized','fontsize',.5,...
+%     'backgroundcolor',[.8 .8 .8],'Enable','off','Tag','String_avarageCrossCorr_PP');
+% uicontrol('style','checkbox','units','normalized','position',[.090 .2728 .03 .03],'String','yes',...
+%     'horizontalalignment','left','fontunits','normalized','fontsize',.5,...
+%     'Tag','avarageCrossCorr_PP','Enable','off',...
+%     'Value',1,'tooltipstring','FUNZIONE NON ANCORA ATTIVA!!!!If yes is selected, for the pairs of stations with same distance the corresponding cross-correlations will be averaged together');
+%
+% % Button Compute cross-correlations of stations pairs
+% uicontrol(mainMASWFig,'style','pushbutton','units','normalized','position',[.005 .2408 .12 .03],...
+%     'string','Compute cross-correlations','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+%     'backgroundcolor',[.7 .7 .7],'Tag','computeCrossCorrelations_PP','Enable','off','Callback',@(numfld,event) ComputeCrossCorr);
+%
+% %% Propersion curve filtering
+% uicontrol(mainMASWFig,'style','text','units','normalized','position',[.006 0.2058 .118 .0285],...
+%     'string','Cross-correlation filtering','horizontalalignment','left','fontunits','normalized','fontsize',.6,'fontweight','bold',...
+%     'backgroundcolor',[230/255 237/255 130/255]);
+% annotation(mainMASWFig,'rectangle','Units','normalized','Position',[.005 0.2058 .119 .03],'FaceColor','none','Color',[0.6 0.6 0.6])
+%
+% % Filter type
+% uicontrol(mainMASWFig,'style','text','units','normalized','position',[.005 .1708 .06 .03],'Enable','off',...
+%     'string','Filter type','horizontalalignment','left','fontunits','normalized','fontsize',.5,'Tag','filtertype_text_PP',...
+%     'backgroundcolor',[.8 .8 .8]);
+% uicontrol(mainMASWFig,'style','popupmenu','units','normalized','position',[.065 .1708 .06 .03],'Enable','off','tag','filter_type',...
+%     'string',{'Lowpass','Highpass','Bandpass','Dynamic'},'horizontalalignment','right','fontunits','normalized','fontsize',.5,'Tag','filtertype_checkbox_PP');
+% % Filter frequency
+% uicontrol(mainMASWFig,'style','text','units','normalized','position',[.005 .1388 .06 .03],'Enable','off',...
+%     'string','Filter freq [Hz]','horizontalalignment','left','fontunits','normalized','fontsize',.5,'Tag','filterfreq_text_PP',...
+%     'backgroundcolor',[.8 .8 .8]);
+% uicontrol(mainMASWFig,'style','edit','units','normalized','position',[.065 .1388 .06 .03],'Enable','off','tag','filter_frequency_PP',...
+%     'string','1','horizontalalignment','center','fontunits','normalized','fontsize',.5,'Tag','filterfreq_PP',...
+%     'tooltipstring',['Indicate Fcut for Highpass/Lowpass i.e. 4' newline ...
+%     'Fcut1,Fcut2 for Bandpass i.e. 1,20' newline 'Fmin,Fmax,Fstep for dynamic i.e. 1,100,2' newline...
+%     'In "dynamic" case the Propagation will be filtered at frequency-step es.1-3Hz, 3-5Hz,...']);
+%
+% % Button Compute cross-correlations Filterin
+% uicontrol(mainMASWFig,'style','pushbutton','units','normalized','position',[.005 .1068 .12 .03],...
+%     'string','Compute filtering','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+%     'backgroundcolor',[.7 .7 .7],'Tag','computeFiltering_PP','Enable','off','Callback',@(numfld,event) ComputeFiltering_PP);
+
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Creazione tabelle
+function TableSelectedStations(data_processing)
+global mainMASWFig
+global MASW
+
+% Segnali da processare
+selected = evalin('base','selected');
+data_selected = data_processing(selected,1); %Dati selezionati da tabella "Signal for processing"
+
+% Dati per creazione tabella
+columnname = {'Station','nCh','X (LAT)','Y (LONG)'};
+columnformat = {'char','char','char','char'};
+
+stationsList = cell(size(data_selected,1),4);
+for i = 1:size(data_selected,1)
+    stationsList{i,1} = data_selected(i).stn;
+    stationsList{i,2} = [];
+    stationsList{i,3} = [];
+    stationsList{i,4} = [];
+end
+
+% Creo tabella
+coordTable = uitable(mainMASWFig,'Units','normalized','Position',[.005 .785-0.0335 .12 .1706],...
+    'Data',stationsList,...
+    'ColumnWidth', {50 30 67 67},...
+    'ColumnName', columnname,...
+    'ColumnFormat', columnformat,...
+    'ColumnEditable', [false true true true],... %serve per attivare la modifica delle coordinate
+    'RowName',[],...
+    'CellSelectionCallback', @(numfld,event) activateButton,...
+    'Tag','coordTable');
+MASW.coordTable = coordTable;
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Calcolo vettore offset + Creazione INFO Tab
+function positionSensorsVector %evaluate position and offset stations
+global mainMASWFig
+global MASW
+%%%%%%%%%%%%%%%%%% Elimina uiobject if already pushed the button
+delete(findobj(mainMASWFig,'tag','Traces_Axis'));
+delete(findobj(mainMASWFig,'tag','AnalysisSettingsTitle'));
+delete(findall(mainMASWFig,'Tag','AnalysisSettingsTitleContour'))
+delete(findobj(mainMASWFig,'tag','TracesStartTimeText'));
+delete(findobj(mainMASWFig,'tag','TracesStartTimeEdit'));
+delete(findobj(mainMASWFig,'tag','TracesEndTimeText'));
+delete(findobj(mainMASWFig,'tag','TracesEndTimeEdit'));
+delete(findobj(mainMASWFig,'tag','MASW_bandwidthText'));
+delete(findobj(mainMASWFig,'tag','MASW_bandwidth_edit'));
+delete(findobj(mainMASWFig,'tag','MASW_velocityText'));
+delete(findobj(mainMASWFig,'tag','MASW_velocity_edit'));
+delete(findobj(mainMASWFig,'tag','MASW_offsetText'));
+delete(findobj(mainMASWFig,'tag','MASW_offset_choice'));
+delete(findobj(mainMASWFig,'tag','MASW_methodText'));
+delete(findobj(mainMASWFig,'tag','MASW_method_choice'));
+delete(findobj(mainMASWFig,'tag','ComputeAnalysisBUTTON'));
+delete(findobj(mainMASWFig,'tag','AMPtraces_edit'));
+delete(findobj(mainMASWFig,'tag','AMPtraces_text'));
+delete(findobj(mainMASWFig,'tag','MASW_freqStepText'));
+delete(findobj(mainMASWFig,'tag','MASW_freqStep_edit'));
+delete(findobj(mainMASWFig,'tag','result1MASW_Axis'));drawnow
+delete(findobj(mainMASWFig,'tag','result2MASW_Axis'));drawnow
+delete(findobj(mainMASWFig,'tag','cbar1LIM'));drawnow
+delete(findobj(mainMASWFig,'tag','cbar1LIM_value'));drawnow
+delete(findobj(mainMASWFig,'tag','cbar2LIM'));drawnow
+delete(findobj(mainMASWFig,'tag','cbar2LIM_value'));drawnow
+
+%%%%%%%%%%%%%%%%%%% input
+data_selected = MASW.data_selected;
+% Get coordinate system
+coordSysOptions = get(findobj(mainMASWFig,'tag','coordSystemMASW'),'value');
+coordSys_selected = get(findobj(mainMASWFig,'tag','coordSystemMASW'),'string');
+coordSys_selected = coordSys_selected{coordSysOptions};
+coordTable = MASW.coordTable;
+
+datiTabella = coordTable.Data;
+datiTabella = sortrows(datiTabella,2); %Ordino le stazioni in funzione della loro posizione
+nCh = size(datiTabella,1);
+MASW.nCh = nCh;
+
+%%%%%%%%%%%%%%%% Calcolo distanze
+distanceReali = zeros(size(datiTabella,1)-1,1)';
+for i = 1:size(datiTabella,1)-1
+    % Se coordinate cartesiane
+    if strcmp('Cartesian',coordSys_selected)
+        distancebtwstations = sqrt((str2double(datiTabella{i+1,3})-str2double(datiTabella{i,3})).^2+(str2double(datiTabella{i+1,4})-str2double(datiTabella{i,4})).^2);
+        distanceReali(i+1) = distanceReali(i)+distancebtwstations
+        
+        % Se coordinate geografiche
+    elseif strcmp('Geographical',coordSys_selected)
+        % Elimino simboli che non servono
+        % Coord stazione 1
+        LAT1 =  strrep(datiTabella{i,3}, '°', ' ');
+        LAT1 =  strrep(LAT1, '''', ' ');
+        if ~strcmp(LAT1,datiTabella{i,3})
+            LAT1 =  dms2degrees(str2num(strrep(LAT1, '"', ' ')));  %converti se non sono in decimali
+        else
+            LAT1 =  str2num(LAT1); %se è già in decimali converti in numero
+        end
+        LONG1 =  strrep(datiTabella{i,4}, '°', ' ');
+        LONG1 =  strrep(LONG1, '''', ' ');
+        if ~strcmp(LONG1,datiTabella{i,4})
+            LONG1 =  dms2degrees(str2num(strrep(LONG1, '"', ' '))); %converti se non sono in decimali
+        else
+            LONG1 =  str2num(LONG1); %se è già in decimali converti in numero
+        end
+        % Coord stazione 2
+        LAT2 =  strrep(datiTabella{i+1,3}, '°', ' ');
+        LAT2 =  strrep(LAT2, '''', ' ');
+        if ~strcmp(LAT2,datiTabella{i+1,3})
+            LAT2 =  dms2degrees(str2num(strrep(LAT2, '"', ' '))); %converti se non sono in decimali
+        else
+            LAT2 =  str2num(LAT2); %se è già in decimali converti in numero
+        end
+        LONG2 =  strrep(datiTabella{i+1,4}, '°', ' ');
+        LONG2 =  strrep(LONG2, '''', ' ');
+        if ~strcmp(LONG2,datiTabella{i+1,4})
+            LONG2 =  dms2degrees(str2num(strrep(LONG2, '"', ' '))); %converti se non sono in decimali
+        else
+            LONG2 =  str2num(LONG2); %se è già in decimali converti in numero
+        end
+        
+        % Calcolo distanza
+        distancebtwstations = pos2dist(LAT1,LONG1,LAT2,LONG2,1)*1000; % Distance btw stations in geographical coordinates in [m]
+        distanceReali(i+1) = distanceReali(i)+distancebtwstations;
+    end
+end  
+
+% Calcolo coordinate in metri nel caso fossero stati inserite coordinate geografiche
+coordinate = ones(size(datiTabella,1),2);
+datiTabella_KM = datiTabella;
+for jj = 1:size(datiTabella,1)
+    
+    LAT2 =  strrep(datiTabella{jj,3}, '°', ' ');
+    LAT2 =  strrep(LAT2, '''', ' ');
+    if ~strcmp(LAT2,datiTabella{jj,3})
+        LAT2 =  dms2degrees(str2num(strrep(LAT2, '"', ' '))); %converti se non sono in decimali
+    else
+        LAT2 =  str2num(LAT2); %se è già in decimali converti in numero
+    end
+    LONG2 =  strrep(datiTabella{jj,4}, '°', ' ');
+    LONG2 =  strrep(LONG2, '''', ' ');
+    if ~strcmp(LONG2,datiTabella{jj,4})
+        LONG2 =  dms2degrees(str2num(strrep(LONG2, '"', ' '))); %converti se non sono in decimali
+    else
+        LONG2 =  str2num(LONG2); %se è già in decimali converti in numero
+    end
+    
+    coordinate(jj,1) = deg2km(LAT2);
+    coordinate(jj,2) = deg2km(LONG2);
+%     datiTabella_degree{jj,3} = LAT2;
+%     datiTabella_degree{jj,4} = LONG2;
+    datiTabella_KM{jj,3} = deg2km(LAT2);
+    datiTabella_KM{jj,4} = deg2km(LONG2);
+end
+
+MASW.coordinate_PhaseShiftAzimuth = coordinate;    
+
+%%%%%%%%%%%%% Calcolo offset tra stazioni
+    dx = mean(diff(distanceReali));
+    distanceEqui = 0:dx:(nCh-1)*dx;
+    MASW.dx = dx;
+    MASW.distanceEqui = distanceEqui;
+    MASW.distanceReali = distanceReali;
+    
+%%%%%%%%%%%%%%%% Nel caso in cui il sistema di coordinate scelto è sbagliato display che c'è un errore
+    if isnan(dx)
+        beep
+        waitfor(msgbox({'Check if you select the correct Coordinate system based on the coordinates in the table!'},'Update','error'))
+        return
+    end
+    
+    %% Crea nuovi uicontrol 
+    % Dati per Uicontrols ---------------------------------------
+    maincolour = [0/255 255/255 255/255];
+    PosTitleUicontrol = [.005 .718-0.0335 .12 .03]-[0 0.038 0 0];
+    PosTitleUicontrol2 = [0.0050    0.5745    0.12    0.0300];
+    PosSubUicontrol_left = [.005 .718-0.0335 .06 .03]-[0 0.038 0 0];
+    PosSubUicontrol_right = [.065 .718-0.0335 .06 .03]-[0 0.038 0 0];
+    PosSubUicontrol_left2 = [.005 .5745 .06 .03];
+    PosSubUicontrol_right2 = [.065 .5745 .06 .03];
+    spazioPiccolo = [0 0.032 0 0];
+    % spazioMedio = [0 0.035 0 0];
+    spazioGrande = [0 0.038 0 0];
+    
+    % SIGNAL PRE_PROCESSING -----------------------------------------------
+    uicontrol('style','text','units','normalized','position',PosTitleUicontrol,...
+        'string',' Signal Pre-processing','horizontalalignment','left','fontunits','normalized','fontsize',.6,'fontweight','bold',...
+        'backgroundcolor',maincolour);
+    
+    % Filtering
+    uicontrol('style','text','units','normalized','position',PosSubUicontrol_left-spazioPiccolo-[0 0.002 0 0],...
+        'string','Filtering','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+        'backgroundcolor',[.8 .8 .8]);
+    uicontrol('style','pushbutton','tag','filterButton','units','normalized','position',PosSubUicontrol_right-spazioPiccolo-[0 0.002 0 0],...
+        'string','Enter','Value', 0,'horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+        'Callback','MASW_filter');
+    
+    
+    % INFO tab ------------------------------------------------------------
+    uicontrol('style','text','units','normalized','position',PosTitleUicontrol2,...
+        'string',' Info','horizontalalignment','left','fontunits','normalized','fontsize',.6,'fontweight','bold',...
+        'backgroundcolor',maincolour);
+    annotation(mainMASWFig,'rectangle','Units','normalized','Position',[0.0040    0.5745    0.1210    0.0315],'FaceColor','none','Color',[0.6 0.6 0.6])
+    
+    % Signal Start Time
+    uicontrol('style','text','units','normalized','position',PosSubUicontrol_left2-spazioPiccolo-[0 0.002 0 0],...
+        'string','Start Time','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+        'backgroundcolor',[.8 .8 .8]);
+    uicontrol('style','text','units','normalized','position',PosSubUicontrol_right2-spazioPiccolo-[0 0.002 0 0],...
+        'string',datestr(data_selected(1).timeAx(1)),'backgroundcolor',[1 1 1],'horizontalalignment','center','fontunits','normalized','fontsize',.4);
+    
+    % Signal End Time
+    uicontrol('style','text','units','normalized','position',PosSubUicontrol_left2-2*spazioPiccolo-[0 0.002 0 0],...
+        'string','End Time','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+        'backgroundcolor',[.8 .8 .8]);
+    uicontrol('style','text','units','normalized','position',PosSubUicontrol_right2-2*spazioPiccolo-[0 0.002 0 0],...
+        'string',datestr(data_selected(1).timeAx(end)),'backgroundcolor',[1 1 1],'horizontalalignment','center','fontunits','normalized','fontsize',.4);
+    
+    % Fs
+    uicontrol('style','text','units','normalized','position',PosSubUicontrol_left2-3*spazioPiccolo-[0 0.002 0 0],...
+        'string','Fs','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+        'backgroundcolor',[.8 .8 .8]);
+    uicontrol('style','text','units','normalized','position',PosSubUicontrol_right2-3*spazioPiccolo-[0 0.002 0 0],'tag','Signal_FS',...
+        'string',[data_selected(1).fs],'backgroundcolor',[1 1 1],'horizontalalignment','center','fontunits','normalized','fontsize',.5);
+    
+    % nCh
+    uicontrol('style','text','units','normalized','position',PosSubUicontrol_left2-4*spazioPiccolo-[0 0.002 0 0],...
+        'string','n. Channels','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+        'backgroundcolor',[.8 .8 .8]);
+    uicontrol('style','text','units','normalized','position',PosSubUicontrol_right2-4*spazioPiccolo-[0 0.002 0 0],'tag','nChTOT',...
+        'string',num2str(nCh),'backgroundcolor',[1 1 1],'horizontalalignment','center','fontunits','normalized','fontsize',.5);
+    
+    % offset stazioni
+    uicontrol('style','text','units','normalized','position',PosSubUicontrol_left2-5*spazioPiccolo-[0 0.002 0 0],...
+        'string','Offset [m]','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+        'backgroundcolor',[.8 .8 .8]);
+    uicontrol('style','text','units','normalized','position',PosSubUicontrol_right2-5*spazioPiccolo-[0 0.002 0 0],'tag','offset',...
+        'string',num2str(dx),'backgroundcolor',[1 1 1],'horizontalalignment','center','fontunits','normalized','fontsize',.5);
+    
+    %% Analysis settings
+    AddAnalysisSettings
+    
+    %% Plot traces
+    PlotMASWtraces
+    
+    %% Attivo possibilità di salvare coordinate
+            set(findobj(mainMASWFig,'tag','SaveCoord'),'enable','on');
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Creazione Analysis settings Tab
+function AddAnalysisSettings
+global mainMASWFig
+global MASW
+data_selected = MASW.data_selected;
+
+maincolour = [0/255 255/255 255/255];
+PosTitleUicontrol = [0.005    0.4125    0.12    0.0300]-[0 0.038 0 0];
+PosSubUicontrol_left = [0.005    0.4125    0.06    0.0300]-[0 0.038 0 0];
+PosSubUicontrol_right = [0.065    0.4125    0.06    0.0300]-[0 0.038 0 0];
+spazioPiccolo = [0 0.032 0 0];
+% spazioMedio = [0 0.035 0 0];
+spazioGrande = [0 0.038 0 0];
+
+uicontrol('style','text','units','normalized','position',PosTitleUicontrol,...
+    'string',' Analysis settings','horizontalalignment','left','fontunits','normalized','fontsize',.6,'fontweight','bold',...
+    'backgroundcolor',maincolour,'Tag','AnalysisSettingsTitle');
+
+annotation(mainMASWFig,'rectangle','Units','normalized','Position',[0.0040    0.6465    0.1210    0.0315],...
+    'FaceColor','none','Color',[0.6 0.6 0.6],'Tag','AnalysisSettingsTitleContour')
+
+% Traces Start Time
+uicontrol('style','text','units','normalized','position',PosSubUicontrol_left-spazioPiccolo-[0 0.002 0 0],...
+    'string','Traces start time','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+    'backgroundcolor',[.8 .8 .8],'Tag','TracesStartTimeText');
+uicontrol('style','edit','units','normalized','position',PosSubUicontrol_right-spazioPiccolo-[0 0.002 0 0],...
+    'string',datestr(data_selected(1).timeAx(1)),'backgroundcolor',[1 1 1],'horizontalalignment','center',...
+    'fontunits','normalized','fontsize',.4,'Tag','TracesStartTimeEdit','Callback',@(numfld,event) cutTraces);
+
+% Signal End Time
+uicontrol('style','text','units','normalized','position',PosSubUicontrol_left-2*spazioPiccolo-[0 0.002 0 0],...
+    'string','Traces end time','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+    'backgroundcolor',[.8 .8 .8],'Tag','TracesEndTimeText');
+uicontrol('style','edit','units','normalized','position',PosSubUicontrol_right-2*spazioPiccolo-[0 0.002 0 0],...
+    'string',datestr(data_selected(1).timeAx(end)),'backgroundcolor',[1 1 1],'horizontalalignment','center',...
+    'fontunits','normalized','fontsize',.4,'Tag','TracesEndTimeEdit','Callback',@(numfld,event) cutTraces);
+
+% Frequency band
+uicontrol('style','text','units','normalized','position',PosSubUicontrol_left-3*spazioPiccolo-[0 0.002 0 0],...
+    'string','Bandwidth [Hz]','horizontalalignment','left','fontunits','normalized','fontsize',.5,...
+    'backgroundcolor',[.8 .8 .8],'tag','MASW_bandwidthText');
+uicontrol('style','edit','units','normalized','position',PosSubUicontrol_right-3*spazioPiccolo-[0 0.002 0 0],...
+    'backgroundcolor',[1 1 1],'horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+    'tag','MASW_bandwidth_edit','String','auto',...
+    'tooltipstring',['Select the frequency limits for the analysis [Hz]. If "auto" is selected the frequency limits' 10 ...
+    'range between 0 and fNy. es. 1,100']);
+
+% Velocity vector
+ uicontrol('style','text','units','normalized','position',PosSubUicontrol_left-4*spazioPiccolo-[0 0.002 0 0],...
+    'string','Velocity  [m/s]','horizontalalignment','left','fontunits','normalized','fontsize',.5,...
+    'backgroundcolor',[.8 .8 .8],'tag','MASW_velocityText');
+ uicontrol('style','edit','units','normalized','position',PosSubUicontrol_right-4*spazioPiccolo-[0 0.002 0 0],...
+    'backgroundcolor',[1 1 1],'horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+    'tag','MASW_velocity_edit','String','10:10:1000',...
+    'tooltipstring',['Create the velocity vector as Vmin:Vstep:Vmax. es.10:10:1000']);
+
+% Offset vector
+uicontrol('style','text','units','normalized','position',PosSubUicontrol_left-5*spazioPiccolo-[0 0.002 0 0],...
+    'string','Offset vector','horizontalalignment','left','fontunits','normalized','fontsize',.5,'Tag','MASW_offsetText',...
+    'backgroundcolor',[.8 .8 .8]);
+uicontrol('style','popupmenu','units','normalized','position',PosSubUicontrol_right-5*spazioPiccolo-[0 0.002 0 0],...
+    'string',{'REAL offset','EQUAL offset'},'Value',2,'horizontalalignment','right','fontunits','normalized','fontsize',.5,...
+    'Tag','MASW_offset_choice','Tooltip',['If "REAL offset" is selected the traces offset vector is defined based on the real distance among the stations' 10 ...
+    'If "EQUAL offset" is selected the traces offset vector is defined as 0:dx:(nCh-1)*dx where dx is the "offset" showed in the INFO tab above' 10 ...
+    'I put this option in case the user want to use the geographical coordinates and therefore to check what would change if the interdistance among stations is not constant']);
+
+
+% Method
+uicontrol('style','text','units','normalized','position',PosSubUicontrol_left-6*spazioPiccolo-[0 0.002 0 0],...
+    'string','Method','horizontalalignment','left','fontunits','normalized','fontsize',.5,'Tag','MASW_methodText',...
+    'backgroundcolor',[.8 .8 .8]);
+uicontrol('style','popupmenu','units','normalized','position',PosSubUicontrol_right-6*spazioPiccolo-[0 0.002 0 0],...
+    'string',{'TauP','PhaseShift','PhaseShift-Azimuth stack'},'Value',1,'horizontalalignment','right','fontunits','normalized','fontsize',.5,...
+    'Callback',@(numfld,event) activationRequiredParameters,'Tag','MASW_method_choice');
+
+% Step in frequenza
+ uicontrol('style','text','units','normalized','position',PosSubUicontrol_left-7*spazioPiccolo-[0 0.002 0 0],...
+    'string','Freq. Step','horizontalalignment','left','fontunits','normalized','fontsize',.5,...
+    'backgroundcolor',[.8 .8 .8],'tag','MASW_freqStepText','Enable','off');
+ uicontrol('style','edit','units','normalized','position',PosSubUicontrol_right-7*spazioPiccolo-[0 0.002 0 0],...
+    'backgroundcolor',[1 1 1],'horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+    'tag','MASW_freqStep_edit','String','1','Enable','off',...
+    'tooltipstring',['Specify the frequency step. es. 1 Hz']);
+
+% Button Compute the vector containing the position of traces
+uicontrol(mainMASWFig,'style','pushbutton','units','normalized','position',[ 0.0050    0.1165    0.12    0.0300],...
+    'string','Compute Analysis','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+    'backgroundcolor',[.7 .7 .7],'Tag','ComputeAnalysisBUTTON','Callback',@(numfld,event) ComputeSurfWavesAnalysis);
+
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Attivo tasti in funzione del metodo scelto
+function activationRequiredParameters
+global MASW
+global mainMASWFig
+
+%% Scelta del metodo
+listOfMethods = get(findobj(mainMASWFig,'tag','MASW_method_choice'),'string');
+chosenMethod = get(findobj(mainMASWFig,'tag','MASW_method_choice'),'value');
+chosenMethod = listOfMethods(chosenMethod); %Metodo scelto per effettuare analisi HVettrale
+
+%% Disattivo parametri non necessari per HV analysis
+switch char(chosenMethod)
+    case 'TauP'
+        set(findobj(mainMASWFig,'tag','MASW_freqStepText'),'enable','off');
+        set(findobj(mainMASWFig,'tag','MASW_freqStep_edit'),'enable','off');
+        
+    case 'PhaseShift'
+        set(findobj(mainMASWFig,'tag','MASW_freqStepText'),'enable','on');
+        set(findobj(mainMASWFig,'tag','MASW_freqStep_edit'),'enable','on');
+        
+    case 'PhaseShift-Azimuth stack'
+        set(findobj(mainMASWFig,'tag','MASW_freqStepText'),'enable','on');
+        set(findobj(mainMASWFig,'tag','MASW_freqStep_edit'),'enable','on');        
+end
+
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Attivazione Buttons
+    function activateButton
+        global MASW
+        global mainMASWFig
+        
+        coordTable = MASW.coordTable;
+        if ~any(cellfun(@isempty, coordTable.Data(:,2))) && ...
+                ~any(cellfun(@isempty, coordTable.Data(:,3)))
+%             set(findobj(mainMASWFig,'tag','SaveCoord'),'enable','on');
+            set(findobj(mainMASWFig,'tag','statVectorDistances'),'enable','on');
+        else
+            set(findobj(mainMASWFig,'tag','SaveCoord'),'enable','off');
+            set(findobj(mainMASWFig,'tag','statVectorDistances'),'enable','off');
+        end
+        
+    end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Save & Load coordinates
+    function SaveCoordinates
+        global MASW
+        % Carico tabella da salvare
+        coordTable = MASW.coordTable;
+        
+        waitfor(msgbox('The stations and the relative info (nCh,X,Y) will be saved in a database with .coord extension'))
+        [filename, pathname] = uiputfile('*.coord','Save file as');
+        save(fullfile(pathname,filename),'coordTable')
+        % Proplay che il salvataggio è avvenuto
+        beep on; beep
+        h=msgbox('Data have been successfully saved!','Update','warn');
+        pause(1)
+        close(h)
+    end
+    function LoadCoordinates
+        global mainMASWFig
+        global MASW
+        [fileName,folder] = uigetfile({'*.coord*'},'Select file to be loaded','MultiSelect', 'off');
+        cd(folder)
+        load(fileName, '-mat' );
+        
+        % Cancello tabella già esistente
+        delete(findobj(mainMASWFig,'tag','coordTable'));
+        
+        % Carico la tabella con già le coordinate
+        columnname = {'Station','nCh','X (LAT)','Y (LONG)'};
+        coordTable = uitable(mainMASWFig,'Units','normalized','Position',[.005 .785-0.0335 .12 .1706],...
+            'Data',coordTable.Data,...
+            'ColumnWidth', {50 30 67 67},...
+            'ColumnName', columnname,...
+            'ColumnFormat', coordTable.ColumnFormat,...
+            'ColumnEditable', [false true true true],... %serve per attivare la modifica delle coordinate
+            'RowName',[],...
+            'CellSelectionCallback', @(numfld,event) activateButton,...
+            'Tag','coordTable');
+        MASW.coordTable = coordTable;
+        
+        % Attiva buttons
+        activateButton
+    end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Plot traces
+function PlotMASWtraces
+global MASW
+global mainMASWFig
+% Se già esiste il plot cancellalo
+delete(findobj(mainMASWFig,'tag','Traces_Axis'));
+
+% Dati input
+data_selected = MASW.data_selected;
+nCh = MASW.nCh;                                                                   %%% ==> CANCELLA!!!!!!!!!
+% TimeAx
+fs = data_selected(1).fs;
+dt = 1/fs;
+N = length(data_selected(1).signal);                                        %%% ==> DA CAMBIAREEE!!! IN BASE ALLA FINESTRA TEMPORALE SCELTA
+timeAx = 0:dt:(N-1)*dt;
+MASW.timeAx = timeAx;
+MASW.timeAx_LIMITED = timeAx; %Questo serve nel caso in cui non tagliassi le tracce
+
+% Rimuovi la DC
+data_withoutDC = ones(length(data_selected(1).signal),nCh);
+for i = 1:size(data_selected,1)
+    data_withoutDC(:,i) = data_selected(i).signal-mean(data_selected(i).signal);
+end
+MASW.data_withoutDC = data_withoutDC;
+MASW.data_LIMITED = data_withoutDC; %Questo serve nel caso in cui non tagliassi le tracce
+
+% Plot
+Traces_Axis = axes(mainMASWFig,'Units','normalized','Position',[0.17 0.2 0.32 0.72]);
+nTraces = 1:nCh;
+for i = 1:size(data_withoutDC,2)
+    plot(Traces_Axis,nTraces(i)+data_withoutDC(:,i)./abs(max(data_withoutDC(:,i))),timeAx,'color',[0,0,0]+0.5) %normalizzo per evidenziare le phases
+    hold on
+end
+set(gca,'YDir','Reverse','Tag','Traces_Axis','XAxisLocation','top','YTickLabelRotation',90)
+xlabel('Traces')
+ylabel('Time [s]')
+grid on; grid minor;
+
+%% Sliderbar amplitude
+        % Amplitude slidebar
+        uicontrol(mainMASWFig,'style','text','units','normalized','position',[.17 .150 .04 .03],...
+            'string','Amplitude','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+            'backgroundcolor',[.8 .8 .8],'Tag','AMPtraces_text');
+        
+        NdynamicWinCorr = 10; %numero di steps della slidebar
+        stepSz = [1,NdynamicWinCorr];
+        uicontrol(mainMASWFig,'style','slider','units','normalized','position',[.211 .150 .08 .03],...
+            'Min',1,'Max',NdynamicWinCorr,'SliderStep',stepSz/(NdynamicWinCorr-1),'Value',1,...
+            'Tag','AMPtraces_edit','callback',@(btn,event) sliderPlotAMP_Traces(btn));
+
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Sliderbar
+function sliderPlotAMP_Traces(~)
+    global mainMASWFig
+    global MASW
+    
+%     %Wait
+%     avviso = annotation(mainMASWFig,'textbox','String','WAIT!!!','Color','b','FontWeight','bold','FontSize',15,...
+%         'Units','normalized','Position',[0.9 0.05 0.06 0.05],'EdgeColor','none','Tag','avviso');
+
+    nCh = MASW.nCh;
+    timeAx = MASW.timeAx;
+    
+    % Slidebar
+    SliderselectedAMPValue = get(findobj(mainMASWFig,'tag','AMPtraces_edit'),'value');
+    
+    % Axes and plot
+    Traces_Axis = findobj(mainMASWFig,'tag','Traces_Axis');
+    nTraces = 1:nCh;
+    linee = Traces_Axis.Children;
+    delete(linee);
+    
+    % Linee originali (non amplificate)
+    data_withoutDC = MASW.data_withoutDC;
+    
+    increment = 0.0001:0.0003:5;
+    increment = increment(round(SliderselectedAMPValue));
+    %         dataForMASW = MASW.dataForMASW;
+    
+    for i = 1:size(data_withoutDC,2)
+        % Propag
+        dist = nTraces(i);
+        plot(Traces_Axis,((data_withoutDC(:,i)-dist).*increment)+dist,timeAx,'color',[0,0,0]+0.5);
+        %%%%%%%
+%         plot(increment.*(nTraces(i)+data_withoutDC(:,i)./abs(max(data_withoutDC(:,i)))),timeAx,'color',[0,0,0]+0.5) %normalizzo per evidenziare le phases
+        hold on
+    end
+    xlim([nTraces(1)-1 nTraces(end)+1]);
+    
+%     % Togli avviso
+%     delete( findall(gcf,'Tag','avviso'));
+end    
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Cut Traces
+function cutTraces
+global MASW
+global mainMASWFig
+
+avviso = annotation(mainMASWFig,'textbox','String','WAIT!!!','Color','b','FontWeight','bold','FontSize',15,...
+    'Units','normalized','Position',[0.9 0.05 0.06 0.05],'EdgeColor','none') 
+
+% Richiamo asse plot dvv
+Traces_Axis = findobj(mainMASWFig,'type','axes','tag','Traces_Axis');
+
+% Timeax
+data_selected = MASW.data_selected;
+timeAx_datetime = data_selected(1).timeAx;
+timeAx_seconds = MASW.timeAx;
+
+% start-end time from mainFig
+startime = datetime(get(findobj(mainMASWFig,'tag','TracesStartTimeEdit'),'String'));
+endtime = datetime(get(findobj(mainMASWFig,'tag','TracesEndTimeEdit'),'String'));
+
+[~,indStartTime] = min(abs(timeAx_datetime-datenum(startime)));
+closest_Starttime = timeAx_datetime(indStartTime,:);
+[~,indEndTime] = min(abs(timeAx_datetime-datenum(endtime)));
+closest_Endtime = timeAx_datetime(indEndTime,:);
+
+% Taglio i dati
+data_LIMITED = MASW.data_withoutDC(indStartTime:indEndTime,:);
+MASW.data_LIMITED = data_LIMITED;
+MASW.timeAx_LIMITED = MASW.timeAx(indStartTime:indEndTime);
+
+% Aggiorno limiti plot
+Traces_Axis.YLim = [timeAx_seconds(indStartTime) timeAx_seconds(indEndTime)];
+
+%
+delete(avviso)
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% COMPUTE ANALYSIS
+function ComputeSurfWavesAnalysis
+global MASW
+global mainMASWFig
+delete(findobj(mainMASWFig,'tag','result1MASW_Axis'));drawnow
+delete(findobj(mainMASWFig,'tag','result2MASW_Axis'));drawnow
+delete(findobj(mainMASWFig,'tag','cbar1LIM'));drawnow
+delete(findobj(mainMASWFig,'tag','cbar1LIM_value'));drawnow
+delete(findobj(mainMASWFig,'tag','cbar2LIM'));drawnow
+delete(findobj(mainMASWFig,'tag','cbar2LIM_value'));drawnow
+delete(findobj(mainMASWFig,'tag','cbar3LIM'));drawnow
+delete(findobj(mainMASWFig,'tag','cbar3LIM_value'));drawnow
+delete(findobj(mainMASWFig,'tag','cbar4LIM'));drawnow
+delete(findobj(mainMASWFig,'tag','cbar4LIM_value'));drawnow
+
+%Wait
+avviso = annotation(mainMASWFig,'textbox','String','WAIT!!!','Color','b','FontWeight','bold','FontSize',15,...
+    'Units','normalized','Position',[0.03 0.05 0.06 0.05],'EdgeColor','none','Tag','avviso');
+drawnow
+
+% INPUT -----------------------------------------------------------------
+data_selected = MASW.data_selected;
+fs = data_selected(1).fs;
+dt = 1/fs;
+dataRaw = MASW.data_LIMITED;
+dx = MASW.dx;
+nCh = MASW.nCh;
+% time
+t = MASW.timeAx_LIMITED;
+ns = length(t);
+zerop_t = 4*2^(nextpow2(ns));             % Zero-padding temporale [-]
+
+
+% Input data from mainFig ----------------------------------------------
+MASW_bandwidth_edit = get(findobj(mainMASWFig,'tag','MASW_bandwidth_edit'),'String');
+MASW_velocity_edit = get(findobj(mainMASWFig,'tag','MASW_velocity_edit'),'String');
+MASW_offset_list = get(findobj(mainMASWFig,'tag','MASW_offset_choice'),'String');
+MASW_offset_choice = get(findobj(mainMASWFig,'tag','MASW_offset_choice'),'Value');
+MASW_method_list = get(findobj(mainMASWFig,'tag','MASW_method_choice'),'String');
+MASW_method_choice = get(findobj(mainMASWFig,'tag','MASW_method_choice'),'Value');
+MASW_freqStep = get(findobj(mainMASWFig,'tag','MASW_freqStep_edit'),'String');
+
+% Freq
+if strcmp(MASW_bandwidth_edit,'auto')
+    freqMin = 0.5;
+    freqMax = data_selected(1).fs/2;
+else
+    range = str2num(MASW_bandwidth_edit);
+    freqMin = range(1);
+    freqMax = range(2);
+end
+res_freq = str2num(MASW_freqStep);
+f_vector = freqMin:res_freq:freqMax;
+% Vel
+eval(['velRange = '  MASW_velocity_edit ';']);
+min_vel = min(velRange);                           % VelocitÃ  minima per l'analisi [m/s]
+max_vel = max(velRange);   
+res_vel = velRange(2)-velRange(1);                            % Step in velocitÃ  per l'analisi [m/s]
+% Offset
+offsetType = MASW_offset_list(MASW_offset_choice);
+if strcmp(offsetType,'EQUAL offset')
+    x = MASW.distanceEqui;
+elseif strcmp(offsetType,'REAL offset')
+    x = MASW.distanceReali;    
+end
+min_offset = min(x);                    % Offset minimo per l'analisi [m]
+max_offset = max(x);                    % Offset massimo per l'analisi [m]
+nx = length(x);
+source_offset = 0;
+
+method = MASW_method_list(MASW_method_choice);
+
+%% Method taup ------------------------------------------------------------
+if strcmp(method,'TauP')
+    % Tau-P ---------------------------------------------------------------
+    p = fliplr(1./velRange);                                              % which p-values
+    tauP = lpradonArosio(dataRaw,t,x,p,freqMin,freqMax,1,1);                 % transform
+    % passo a freq-V
+    Nsamples = length(t);
+    N = 2^nextpow2(Nsamples);
+    FreqAxis = 0:fs/(N-1):fs;
+    taupF = fft(tauP,N,1);
+    FreqAxis = FreqAxis(1:N/2);
+    taupF_Mag = abs(taupF(1:N/2,:));
+    
+elseif strcmp(method,'PhaseShift')
+    % PhaseShift ----------------------------------------------------------
+    data = dataRaw(:,[round((min_offset-source_offset)/dx)+1:round(dx/dx):round((max_offset-source_offset)/dx)+1]);
+    data = [data; zeros(zerop_t-ns,size(data,2))];                                                            % Zero-padding temporale
+    [ns,nx] = size(data);
+    fst = fs;                                                                                       % Frequenza campionamento temporale [Hz]
+    dft = fst/ns;                                                                                   % Passo di campionamento in frequenza [Hz]
+    fqzt = 0:dft:fst/2 - dft;                                                                       % Asse frequenze temporali da 0 a +Ny [Hz]
+    offset_ax = (source_offset+(min_offset-source_offset)):dx:(source_offset+(min_offset-source_offset))+(nx-1)*dx;
+    trasf = fft(data,ns,1);
+    fv = zeros(length(velRange),length(f_vector));
+    counter_v = 1;
+    w = waitbar(0,'Computing FV spectrum...');
+    set(findobj(w,'type','patch'),'facecolor','b','edgecolor','b')
+    for vel = min_vel:res_vel:max_vel
+        counter_f = 1;
+        for freq = freqMin:res_freq:freqMax
+            fv(counter_v,counter_f) = sum(trasf(round(freq/dft),:)./abs(trasf(round(freq/dft),:)).*exp(2*pi*1i*offset_ax*freq/vel));
+            counter_f = counter_f + 1;
+        end
+        waitbar(counter_v/length(velRange),w)
+        counter_v = counter_v + 1;
+    end
+    close(w)
+    FV = abs(fv);
+    % Normalizzo lo spettro
+    FV = FV / max(max(FV));
+    
+elseif strcmp(method,'PhaseShift-Azimuth stack')
+    phaseShiftAzimWIN
+    
+    % Coordinate
+    coordSysOptions = get(findobj(mainMASWFig,'tag','coordSystemMASW'),'value');
+    coordSys_selected = get(findobj(mainMASWFig,'tag','coordSystemMASW'),'string');
+    coordSys_selected = coordSys_selected{coordSysOptions};
+    if strcmp('Cartesian',coordSys_selected)
+        coordTable = MASW.coordTable.DisplayData;
+        coordTable = sortrows(coordTable,2);
+        x = coordTable(:,3);
+        y = coordTable(:,4);
+        x = sscanf(sprintf('%s ', x{:}),'%f'); x = x';
+        y = sscanf(sprintf('%s ', y{:}),'%f'); y = y';
+        
+    elseif strcmp('Geographical',coordSys_selected)
+        coordinate = MASW.coordinate_PhaseShiftAzimuth;
+        x = zeros(size(coordinate,1),1);
+        y = zeros(size(coordinate,1),1);
+        for i = 1:size(coordinate,1)
+            x(i) = coordinate(1,1)-coordinate(i,1);
+            y(i) = coordinate(1,2)-coordinate(i,2);
+        end
+        x = x'.*1000; % in metri
+        y = y'.*1000; % in metri
+    end
+    
+    
+    % Azimuth
+    AzimuthStep = MASW.AzimuthStep;
+    sourceAzimuth = (0:AzimuthStep:360-AzimuthStep)*(pi/180);       %Scanned azimuths
+    % Data
+    zerop_t = 4*2^(nextpow2(ns));             % Zero-padding temporale [-]
+    dataRaw = [dataRaw; zeros(zerop_t-ns,size(dataRaw,2))];                                                            % Zero-padding temporale
+    [ns,nx] = size(dataRaw);
+    % Input
+    f_vector = freqMin:res_freq:freqMax;
+    V_vector = min_vel:res_vel:max_vel;
+    
+    fst = fs;                                                                                       % Frequenza campionamento temporale [Hz]
+    dft = fst/ns;                                                                                   % Passo di campionamento in frequenza [Hz]
+    fqzt = 0:dft:fst/2 - dft;                                                                       % Asse frequenze temporali da 0 a +Ny [Hz]
+    % offset_ax = (source_offset+(min_offset-source_offset)):res_offset:(source_offset+(min_offset-source_offset))+(nx-1)*res_offset;
+    trasf = fft(dataRaw,ns,1);
+    slowVector = 1./V_vector;
+    trasf = trasf./abs(trasf);              % AMPLITUDE NORMALIZATION
+    tempMatrix1 = x'*slowVector;
+    tempMatrix2 = y'*slowVector;
+    fv = zeros(length(V_vector),length(f_vector),length(sourceAzimuth));
+    w = waitbar(0,'Computing FV-vs-Azimuth spectra...');
+    set(findobj(w,'type','patch'),'facecolor','b','edgecolor','b')
+    for az = 1:length(sourceAzimuth)
+        tempMatrix = tempMatrix1*cos(sourceAzimuth(az)) + tempMatrix2*sin(sourceAzimuth(az));
+        counter_f = 1;
+        for freq = freqMin:res_freq:freqMax
+            phaseShift = exp(1i*(2*pi*freq)*tempMatrix);
+            fv(:,counter_f,az) = abs(transpose(trasf(round(freq/dft),:)*phaseShift));
+            counter_f = counter_f + 1;
+        end
+        waitbar(az/length(sourceAzimuth),w)
+    end
+    close(w);
+    FV = sum(fv,3);                         % Sommo su tutti gli azimuth
+    FV = FV / max(max(FV));                 % Normalizzo lo spettro (per questioni di comoditÃ  del range della colormap in fase di plot)
+end
+
+%% Plot results -----------------------------------------------------------
+
+if strcmp(method,'TauP')
+    % ==> Plot time-V
+    result1MASW_Axis = axes(mainMASWFig,'Units','normalized','Position',[0.58 0.58 0.36 0.34]);
+    result1MASW_Axis.Toolbar.Visible = 'on';
+    imagesc(t,velRange,fliplr(tauP));
+    set(gca,'Tag','result1MASW_Axis');
+    ylabel('Velocity [m/s]');
+    xlabel('time [s]');
+    result1MASW_Axis.Toolbar.Visible = 'on';
+    % Colorbar
+    posizioneAsse = result1MASW_Axis.Position;
+    cbar1 = colorbar;
+    cbar1.Position = [0.95 posizioneAsse(1,2) 0.01 posizioneAsse(4)];
+    cbar1.Label.String = '[-]'
+    MASW.cbar1 = cbar1;
+    limiticbar1 = cbar1.Limits;
+    uicontrol('style','text','Tag','cbar1LIM','units','normalized','position',[0.83 0.52 0.05 0.025],...
+        'string','Cbar Lim','horizontalalignment','center','fontunits','normalized','fontsize',.6,'FontWeight','bold',...
+        'backgroundcolor',[.8 .8 .8]);
+    uicontrol('style','edit','tag','cbar1LIM_value','units','normalized','position',[0.88 0.52 0.06 0.025],...
+        'horizontalalignment','center','fontunits','normalized','fontsize',.5,'Tooltip','Set colorbar limits',...
+        'String',[num2str(limiticbar1(1)) ',' num2str(limiticbar1(2))],'Callback',@(numfld,event) updateChanges_taup);
+    
+    % ==> Plot freq-V
+    result2MASW_Axis = axes(mainMASWFig,'Units','normalized','Position',[0.58 0.1 0.36 0.35]);
+    result2MASW_Axis.Toolbar.Visible = 'on';
+    imagesc(FreqAxis,velRange,fliplr(taupF_Mag));
+    set(gca,'Tag','result2MASW_Axis')
+    ylabel('Velocity [m/s]');
+    xlabel('Frequency [Hz]');
+    result2MASW_Axis.Toolbar.Visible = 'on';
+    % Colorbar
+    posizioneAsse = result2MASW_Axis.Position;
+    cbar2 = colorbar;
+    cbar2.Position = [0.95 posizioneAsse(1,2) 0.01 posizioneAsse(4)];
+    cbar2.Label.String = '[-]'
+    MASW.cbar2 = cbar2;
+    limiticbar2 = cbar2.Limits;
+    uicontrol('style','text','Tag','cbar2LIM','units','normalized','position',[0.83 0.037 0.05 0.025],...
+        'string','Cbar Lim','horizontalalignment','center','fontunits','normalized','fontsize',.6,'FontWeight','bold',...
+        'backgroundcolor',[.8 .8 .8]);
+    uicontrol('style','edit','tag','cbar2LIM_value','units','normalized','position',[0.88 0.037 0.06 0.025],...
+        'horizontalalignment','center','fontunits','normalized','fontsize',.5,'Tooltip','Set colorbar limits',...
+        'String',[num2str(limiticbar2(1)) ',' num2str(limiticbar2(2))],'Callback',@(numfld,event) updateChanges_taup);
+
+elseif strcmp(method,'PhaseShift')
+    result1MASW_Axis = axes(mainMASWFig,'Units','normalized','Position',[0.58 0.58 0.36 0.34]);
+    result1MASW_Axis.Toolbar.Visible = 'on';
+    imagesc(f_vector,velRange,20*log10(FV+eps)')
+    set(gca,'Tag','result1MASW_Axis');
+    result1MASW_Axis.Toolbar.Visible = 'on';
+    mindb = fix(20*log10(min(min(FV))+eps));
+    colormap(jet)
+    % Colorbar
+    posizioneAsse = result1MASW_Axis.Position;
+    cbar3 = colorbar;
+    cbar.Position = [0.95 posizioneAsse(1,2) 0.01 posizioneAsse(4)];
+    cbar3.Label.String = '[dB]';
+    MASW.cbar3 = cbar3;
+    limiticbar3 = cbar3.Limits;
+    
+    uicontrol('style','text','Tag','cbar3LIM','units','normalized','position',[0.83 0.52 0.05 0.025],...
+        'string','Cbar Lim','horizontalalignment','center','fontunits','normalized','fontsize',.6,'FontWeight','bold',...
+        'backgroundcolor',[.8 .8 .8]);
+    uicontrol('style','edit','tag','cbar3LIM_value','units','normalized','position',[0.88 0.52 0.06 0.025],...
+        'horizontalalignment','center','fontunits','normalized','fontsize',.5,'Tooltip','Set colorbar limits',...
+        'String',[num2str(limiticbar3(1)) ',' num2str(limiticbar3(2))],'Callback',@(numfld,event) updateChanges_Phaseshift);
+    
+    axis([min(f_vector) max(f_vector) min(velRange) max(velRange) ]);
+    xlabel('Frequency [Hz]'); ylabel('Phase velocity [m/s]'); title(['fv Spectrum'],'interpreter','none','fontweight','bold');
+    
+elseif strcmp(method,'PhaseShift-Azimuth stack')
+    result1MASW_Axis = axes(mainMASWFig,'Units','normalized','Position',[0.58 0.58 0.36 0.34]);
+    result1MASW_Axis.Toolbar.Visible = 'on';
+    imagesc(f_vector,V_vector,20*log10(FV+eps))
+    mindb = fix(20*log10(min(min(FV))+eps));
+    axis xy
+    colormap(jet)
+    set(gca,'Tag','result1MASW_Axis');
+    result1MASW_Axis.Toolbar.Visible = 'on';
+    % Colorbar
+    posizioneAsse = result1MASW_Axis.Position;
+    cbar4 = colorbar;
+    cbar.Position = [0.95 posizioneAsse(1,2) 0.01 posizioneAsse(4)];
+    cbar4.Label.String = '[dB]';
+    MASW.cbar4 = cbar4;
+    limiticbar4 = cbar4.Limits;
+    
+    uicontrol('style','text','Tag','cbar4LIM','units','normalized','position',[0.83 0.52 0.05 0.025],...
+        'string','Cbar Lim','horizontalalignment','center','fontunits','normalized','fontsize',.6,'FontWeight','bold',...
+        'backgroundcolor',[.8 .8 .8]);
+    uicontrol('style','edit','tag','cbar4LIM_value','units','normalized','position',[0.88 0.52 0.06 0.025],...
+        'horizontalalignment','center','fontunits','normalized','fontsize',.5,'Tooltip','Set colorbar limits',...
+        'String',[num2str(limiticbar4(1)) ',' num2str(limiticbar4(2))],'Callback',@(numfld,event) updateChanges_Phaseshift_AzimithStacked);
+    
+    axis([min(f_vector) max(f_vector) min(velRange) max(velRange) ]);
+    xlabel('Frequency [Hz]'); ylabel('Phase velocity [m/s]'); title(['Azimuth-stacked FV Spectrum'],'interpreter','none','fontweight','bold');
+end
+
+delete(avviso);
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function updateChanges_taup
+global MASW
+global mainMASWFig
+result1MASW_Axis = findobj(mainMASWFig,'tag','result1MASW_Axis');
+result2MASW_Axis = findobj(mainMASWFig,'tag','result2MASW_Axis');
+cbar1LIM = str2num(get(findobj(mainMASWFig,'tag','cbar1LIM_value'),'string')); 
+cbar2LIM = str2num(get(findobj(mainMASWFig,'tag','cbar2LIM_value'),'string'));
+
+% tau-P
+cbar1 = MASW.cbar1;
+result1MASW_Axis.CLim = cbar1LIM;
+cbar1.Limits = cbar1LIM; %Aggiorna colorbar
+
+cbar2 = MASW.cbar2;
+result2MASW_Axis.CLim = cbar2LIM;
+cbar2.Limits = cbar2LIM; %Aggiorna colorbar
+
+end
+
+function updateChanges_Phaseshift
+global MASW
+global mainMASWFig
+result1MASW_Axis = findobj(mainMASWFig,'tag','result1MASW_Axis');
+cbar3LIM = str2num(get(findobj(mainMASWFig,'tag','cbar3LIM_value'),'string'));
+
+% Phase shift
+cbar3 = MASW.cbar3;
+result1MASW_Axis.CLim = cbar3LIM;
+cbar3.Limits = cbar3LIM; %Aggiorna colorbar
+end
+
+function updateChanges_Phaseshift_AzimithStacked
+global MASW
+global mainMASWFig
+result1MASW_Axis = findobj(mainMASWFig,'tag','result1MASW_Axis');
+cbar4LIM = str2num(get(findobj(mainMASWFig,'tag','cbar4LIM_value'),'string'));
+
+% Phase shift
+cbar4 = MASW.cbar4;
+result1MASW_Axis.CLim = cbar4LIM;
+cbar4.Limits = cbar4LIM; %Aggiorna colorbar
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%
+    function updateMASWPlot
+        global mainMASWFig
+        % Xlimits
+        xlimits = str2num(get(findobj(mainMASWFig,'tag','xlimits_PPPlot'),'String'));
+        PropCurv_Axis = findobj(mainMASWFig,'tag','PropCurv_Axis');
+        PropCurv_Axis.XLim = xlimits;
+    end
+
+    function ComputeFiltering_PP
+        global mainMASWFig
+        global MASW
+        % Get parameters
+        % filtering = get(findobj(mainMASWFig,'tag','filtercheck_PP'),'value');
+        filterselected = get(findobj(mainMASWFig,'tag','filtertype_checkbox_PP'),'value');
+        filtertype = get(findobj(mainMASWFig,'tag','filtertype_checkbox_PP'),'string');
+        filtertype = filtertype(filterselected);
+        filterfreq = get(findobj(mainMASWFig,'tag','filterfreq_PP'),'string');
+        Fs = MASW.Fs;
+        dataForMASW = MASW.dataForMASW;
+        dataForMASW_FILTERED = dataForMASW;
+        time_corr_PP = MASW.time_corr_PP;
+        
+        %Loading bar
+        barracaricamento = waitbar(0,'Filtering computation','Units','normalized','Position',[0.73,0.06,0.25,0.08]);
+        
+        % Filtering
+        % Design lowpass filt
+        if strcmp(filtertype,'Lowpass')
+            for j = 1:size(dataForMASW,1)
+                dataForMASW_FILTERED{j,4} = lowpass(dataForMASW{j,4},str2num(filterfreq), Fs,'ImpulseResponse','iir','Steepness',0.95);
+                waitbar((1/size(dataForMASW,1))*j,barracaricamento,'Filtering computation');
+            end
+            MASW.dataForMASW_FILTERED = dataForMASW_FILTERED;
+            PlotMASW_FILTERED %It works only for low-high-band pass filtering
+        end
+        
+        % Design highpass filter
+        if strcmp(filtertype,'Highpass')
+            for j = 1:size(dataForMASW,1)
+                dataForMASW_FILTERED{j,4} = highpass(dataForMASW{j,4},str2num(filterfreq), Fs,'ImpulseResponse','iir','Steepness',0.95);
+                waitbar((1/size(dataForMASW,1))*j,barracaricamento,'Filtering computation');
+            end
+            MASW.dataForMASW_FILTERED = dataForMASW_FILTERED;
+            PlotMASW_FILTERED %It works only for low-high-band pass filtering
+        end
+        
+        % Design bandpass filter
+        if strcmp(filtertype,'Bandpass')
+            for j = 1:size(dataForMASW,1)
+                dataForMASW_FILTERED{j,4}   = bandpass(dataForMASW{j,4},str2num(filterfreq), Fs,'ImpulseResponse','iir','Steepness',0.95);
+                waitbar((1/size(dataForMASW,1))*j,barracaricamento,'Filtering computation');
+            end
+            MASW.dataForMASW_FILTERED = dataForMASW_FILTERED;
+            PlotMASW_FILTERED %It works only for low-high-band pass filtering
+        end
+        
+        % Design dynamic filter
+        if strcmp(filtertype,'Dynamic')
+            filterfreqValues = str2num(filterfreq);
+            filterBands = filterfreqValues(1):filterfreqValues(3):filterfreqValues(2);
+            % Pre-alloco cell da riempire con i risultati
+            dataForMASW_FILTERED = cell(size(dataForMASW,1)+1,length(filterBands));
+            dataForMASW_FILTERED{1,1} = 'Stations pairs';
+            for i = 1:size(dataForMASW,1) %%%%%%%%%%%%
+                % Titolo prima colonna
+                dataForMASW_FILTERED{i+1,1} =  dataForMASW{i,2};
+                for j = 1:length(filterBands)-1
+                    % Creo nome colonna
+                    if i == 1
+                        % Titolo prima riga
+                        dataForMASW_FILTERED{1,j+1} = ['Bandwidth:' num2str(filterBands(j)) '-' num2str(filterBands(j+1))];
+                    end
+                    %Banda filtro
+                    filterBand = [filterBands(j) filterBands(j+1)];
+                    % Filtering
+                    resultFilterBand = bandpass(dataForMASW{i,4},filterBand,Fs,'ImpulseResponse','iir','Steepness',0.95);
+                    dataForMASW_FILTERED{i+1,j+1} = resultFilterBand;
+                    waitbar((1/size(dataForMASW,1))*i,barracaricamento,'Filtering computation');
+                end
+            end
+            MASW.dataForMASW_FILTERED = dataForMASW_FILTERED;
+            % Plot for dynamic filtering
+            PlotMASW_DynamicFilter
+        end
+        
+        close(barracaricamento)
+    end
+
+    function PlotMASW_FILTERED
+        global MASW
+        global mainMASWFig
+        % Delete existing objects
+        delete(findobj(mainMASWFig,'tag','PropCurv_Axis'));drawnow
+        PropCurv_Axis = findobj(mainMASWFig,'tag','PropCurv_Axis');
+        cla(PropCurv_Axis)
+        delete(findobj(mainMASWFig,'tag','xlimits_PPPlot'));drawnow
+        delete(findobj(mainMASWFig,'tag','xlimits_PPPlot_text'));drawnow
+        delete(findobj(mainMASWFig,'tag','crosscorrAMP_PPPlot_text'));drawnow
+        delete(findobj(mainMASWFig,'tag','dynamicWinCorrSlider_PP'));drawnow
+        delete(findobj(mainMASWFig,'tag','Reset_PPPlot'));drawnow
+        delete(findobj(mainMASWFig,'tag','dynamicFiltersliderbar_PPPlot_text'));drawnow
+        delete(findobj(mainMASWFig,'tag','dynamicFiltersliderbar_PPPlot'));drawnow
+        
+        dataForMASW_FILTERED = MASW.dataForMASW_FILTERED;
+        time_corr_PP = MASW.time_corr_PP;
+        
+        
+        PropCurv_Axis = axes(mainMASWFig,'Units','normalized','Position',[0.17 0.245 0.32 0.72],'Tag','PropCurv_Axis');
+        for i = 1:size(dataForMASW_FILTERED,1)
+            plot(PropCurv_Axis,time_corr_PP,dataForMASW_FILTERED{i,3}+dataForMASW_FILTERED{i,4}./abs(max(dataForMASW_FILTERED{i,4})),'color',[0,0,0]+0.5) %normalizzo per evidenziare le phases
+            hold(PropCurv_Axis,'on')
+        end
+        
+        ylim([0 dataForMASW_FILTERED{end,3}+5])
+        xlabel(PropCurv_Axis,'Correlation lag-time [s]','FontSize',12,'FontName','garamond');
+        ylabel(PropCurv_Axis,'Inter-station distance [m]','FontSize',12,'FontName','garamond');
+        % grid on; grid minor
+        PropCurv_Axis.XGrid = 'on';
+        PropCurv_Axis.YGrid = 'on';
+        PropCurv_Axis.XMinorGrid = 'on';
+        PropCurv_Axis.YMinorGrid = 'on';
+        PropCurv_Axis.XLim;
+        set(PropCurv_Axis,'Tag','PropCurv_Axis');
+        
+        % Titolo
+        filterselected = get(findobj(mainMASWFig,'tag','filtertype_checkbox_PP'),'value');
+        filtertype = get(findobj(mainMASWFig,'tag','filtertype_checkbox_PP'),'string');
+        filtertype = filtertype(filterselected);
+        filterfreq = get(findobj(mainMASWFig,'tag','filterfreq_PP'),'string');
+        title(PropCurv_Axis,[char(filtertype) ':' char(filterfreq) 'Hz'],'FontSize',10,'FontName','garamond');
+        
+        % Pulsante modifica Xlimits
+        uicontrol(mainMASWFig,'style','text','units','normalized','position',[.17 .150 .03 .03],...
+            'string','Xlimits','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+            'backgroundcolor',[.8 .8 .8],'Tag','xlimits_PPPlot_text');
+        uicontrol(mainMASWFig,'style','edit','units','normalized','position',[.2 .150 .04 .03],'tag','xlimits_PPPlot',...
+            'backgroundcolor',[1 1 1],'String',[num2str(PropCurv_Axis.XLim(1)) ',' num2str(PropCurv_Axis.XLim(2))],'horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+            'tooltipstring','Limits of xaxis. es. -2,2','Callback',@(numfld,event) updateMASWPlot);
+        
+        % Amplitude slidebar
+        uicontrol(mainMASWFig,'style','text','units','normalized','position',[.2450 .150 .04 .03],...
+            'string','Amplitude','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+            'backgroundcolor',[.8 .8 .8],'Tag','crosscorrAMP_PPPlot_text');
+        
+        NdynamicWinCorr = 10; %numero di steps della slidebar
+        stepSz = [1,NdynamicWinCorr];
+        uicontrol(mainMASWFig,'style','slider','units','normalized','position',[.287 .150 .08 .03],...
+            'Min',1,'Max',NdynamicWinCorr,'SliderStep',stepSz/(NdynamicWinCorr-1),'Value',1,...
+            'Tag','dynamicWinCorrSlider_PP','callback',@(btn,event) sliderPlotAMP_Traces(btn));
+        
+        uicontrol(mainMASWFig,'style','pushbutton','units','normalized','position',[.44 .150 .05 .03],'tag','Reset_PPPlot',...
+            'backgroundcolor',[.7 .7 .7],'String','Reset','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+            'tooltipstring','Reset button plot back the NO-Filtered Propersion curve','Callback',@(numfld,event) PlotMASW);
+        
+        
+        % salvo le linee nel plot per poter usare la sliderbar
+        lineeMainplot = PropCurv_Axis.Children;
+        lineeMainplot_PP = zeros(length(lineeMainplot(1).YData),size(lineeMainplot,1));
+        for i = 1:size(lineeMainplot,1)
+            lineeMainplot_PP(:,i) = lineeMainplot(i).YData';
+        end
+        MASW.lineeMainplot_PP = lineeMainplot_PP;
+        
+    end
+
+    function PlotMASW_DynamicFilter
+        global MASW
+        global mainMASWFig
+        % Delete existing objects
+        delete(findobj(mainMASWFig,'tag','PropCurv_Axis'));drawnow
+        PropCurv_Axis = findobj(mainMASWFig,'tag','PropCurv_Axis');
+        cla(PropCurv_Axis)
+        delete(findobj(mainMASWFig,'tag','xlimits_PPPlot'));drawnow
+        delete(findobj(mainMASWFig,'tag','xlimits_PPPlot_text'));drawnow
+        delete(findobj(mainMASWFig,'tag','crosscorrAMP_PPPlot_text'));drawnow
+        delete(findobj(mainMASWFig,'tag','dynamicWinCorrSlider_PP'));drawnow
+        delete(findobj(mainMASWFig,'tag','Reset_PPPlot'));drawnow
+        delete(findobj(mainMASWFig,'tag','dynamicFiltersliderbar_PPPlot_text'));drawnow
+        delete(findobj(mainMASWFig,'tag','dynamicFiltersliderbar_PPPlot'));drawnow
+        
+        dataForMASW = MASW.dataForMASW; % per distance
+        dataForMASW_FILTERED = MASW.dataForMASW_FILTERED;
+        time_corr_PP = MASW.time_corr_PP;
+        
+        
+        for i = 1:size(dataForMASW_FILTERED,2)-1
+            delete(findobj(mainMASWFig,'tag','PropCurv_Axis'));drawnow
+            PropCurv_Axis = findobj(mainMASWFig,'tag','PropCurv_Axis');
+            cla(PropCurv_Axis)
+            PropCurv_Axis = axes(mainMASWFig,'Units','normalized','Position',[0.17 0.245 0.32 0.72],'Tag','PropCurv_Axis');
+            for j = 1:size(dataForMASW_FILTERED,1)-1
+                plot(PropCurv_Axis,time_corr_PP,dataForMASW{j,3}+dataForMASW_FILTERED{j+1,i+1}./abs(max(dataForMASW_FILTERED{j+1,i+1})),'color',[0,0,0]+0.5) %normalizzo per evidenziare le phases
+                hold(PropCurv_Axis,'on')
+            end
+            % Plot characteristic
+            ylim([0 dataForMASW{end,3}+5])
+            xlabel(PropCurv_Axis,'Correlation lag-time [s]','FontSize',12,'FontName','garamond');
+            ylabel(PropCurv_Axis,'Inter-station distance [m]','FontSize',12,'FontName','garamond');
+            % grid on; grid minor
+            PropCurv_Axis.XGrid = 'on';
+            PropCurv_Axis.YGrid = 'on';
+            PropCurv_Axis.XMinorGrid = 'on';
+            PropCurv_Axis.YMinorGrid = 'on';
+            PropCurv_Axis.XLim
+            set(PropCurv_Axis,'Tag','PropCurv_Axis');
+            title(PropCurv_Axis,[dataForMASW_FILTERED{1,i+1} 'Hz'],'FontSize',10,'FontName','garamond');
+            pause(1)
+        end
+        
+        
+        
+        % Pulsante modifica Xlimits
+        uicontrol(mainMASWFig,'style','text','units','normalized','position',[.17 .150 .03 .03],...
+            'string','Xlimits','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+            'backgroundcolor',[.8 .8 .8],'Tag','xlimits_PPPlot_text');
+        uicontrol(mainMASWFig,'style','edit','units','normalized','position',[.2 .150 .04 .03],'tag','xlimits_PPPlot',...
+            'backgroundcolor',[1 1 1],'String',[num2str(PropCurv_Axis.XLim(1)) ',' num2str(PropCurv_Axis.XLim(2))],'horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+            'tooltipstring','Limits of xaxis. es. -2,2','Callback',@(numfld,event) updateMASWPlot);
+        
+        % Amplitude slidebar
+        uicontrol(mainMASWFig,'style','text','units','normalized','position',[.2450 .150 .04 .03],...
+            'string','Amplitude','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+            'backgroundcolor',[.8 .8 .8],'Tag','crosscorrAMP_PPPlot_text');
+        
+        NdynamicWinCorr = 10; %numero di steps della slidebar
+        stepSz = [1,NdynamicWinCorr];
+        uicontrol(mainMASWFig,'style','slider','units','normalized','position',[.287 .150 .08 .03],...
+            'Min',1,'Max',NdynamicWinCorr,'SliderStep',stepSz/(NdynamicWinCorr-1),'Value',1,...
+            'Tag','dynamicWinCorrSlider_PP','callback',@(btn,event) sliderPlotAMP_Traces(btn));
+        
+        uicontrol(mainMASWFig,'style','pushbutton','units','normalized','position',[.44 .150 .05 .03],'tag','Reset_PPPlot',...
+            'backgroundcolor',[.7 .7 .7],'String','Reset','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+            'tooltipstring','Reset button plot back the NO-Filtered Propersion curve','Callback',@(numfld,event) PlotMASW);
+        
+        % Dynamic filter slider
+        uicontrol(mainMASWFig,'style','text','units','normalized','position',[.17 .1068 .1150 .03],...
+            'string','Change filter bandwidth','horizontalalignment','center','fontunits','normalized','fontsize',.5,...
+            'backgroundcolor',[.8 .8 .8],'Tag','dynamicFiltersliderbar_PPPlot_text');
+        
+        dataForMASW_FILTERED = MASW.dataForMASW_FILTERED;
+        NdynamicWinCorr = size(dataForMASW_FILTERED,2)-1; %numero di steps della slidebar
+        stepSz = [1,NdynamicWinCorr];
+        uicontrol(mainMASWFig,'style','slider','units','normalized','position',[.287 .1068 .08 .03],...
+            'Min',1,'Max',NdynamicWinCorr,'SliderStep',stepSz/(NdynamicWinCorr-1),'Value',1,...
+            'Tag','dynamicFiltersliderbar_PPPlot','callback',@(btn,event) Filtersliderbar_PPPlot(btn));
+        
+        % salvo le linee nel plot per poter usare la sliderbar
+        lineeMainplot = PropCurv_Axis.Children;
+        lineeMainplot_PP = zeros(length(lineeMainplot(1).YData),size(lineeMainplot,1));
+        for i = 1:size(lineeMainplot,1)
+            lineeMainplot_PP(:,i) = lineeMainplot(i).YData';
+        end
+        MASW.lineeMainplot_PP = lineeMainplot_PP;
+        
+    end
+
+
+    function Filtersliderbar_PPPlot(~)
+        global mainMASWFig
+        global MASW
+        
+        
+        % Slidebar
+        SliderselectedAMPValue = get(findobj(mainMASWFig,'tag','dynamicFiltersliderbar_PPPlot'),'value');
+        
+        % Dati
+        dataForMASW = MASW.dataForMASW; % per distance
+        dataForMASW_FILTERED = MASW.dataForMASW_FILTERED;
+        time_corr_PP = MASW.time_corr_PP;
+        
+        % Axes and plot
+        PropCurv_Axis = findobj(mainMASWFig,'tag','PropCurv_Axis');
+        linee = PropCurv_Axis.Children;
+        delete(linee);
+        
+        % Plot
+        PropCurv_Axis = findobj(mainMASWFig,'tag','PropCurv_Axis');
+        for j = 1:size(dataForMASW_FILTERED,1)-1
+            plot(PropCurv_Axis,time_corr_PP,dataForMASW{j,3}+dataForMASW_FILTERED{j+1,SliderselectedAMPValue+1}./abs(max(dataForMASW_FILTERED{j+1,SliderselectedAMPValue+1})),'color',[0,0,0]+0.5) %normalizzo per evidenziare le phases
+            hold(PropCurv_Axis,'on')
+        end
+        % Plot characteristic
+        ylim([0 dataForMASW{end,3}+5])
+        xlabel(PropCurv_Axis,'Correlation lag-time [s]','FontSize',12,'FontName','garamond');
+        ylabel(PropCurv_Axis,'Inter-station distance [m]','FontSize',12,'FontName','garamond');
+        % grid on; grid minor
+        PropCurv_Axis.XGrid = 'on';
+        PropCurv_Axis.YGrid = 'on';
+        PropCurv_Axis.XMinorGrid = 'on';
+        PropCurv_Axis.YMinorGrid = 'on';
+        PropCurv_Axis.XLim
+        set(PropCurv_Axis,'Tag','PropCurv_Axis');
+        title(PropCurv_Axis,[dataForMASW_FILTERED{1,SliderselectedAMPValue+1} 'Hz'],'FontSize',10,'FontName','garamond');
+    end
+
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% FUNZIONI PER METODO PhaseShift -Azimuth stacked
+function phaseShiftAzimWIN
+global MASW
+data_selected = MASW.data_selected;
+%% Creo finestra per chiedere quale stazione usare come riferimento
+StationREFUIFigure = figure('numbertitle','off','Name','Filtering','toolbar','none','menubar','none','Position', [600 450 301 100]);
+
+% b) Create FiltertypeDropDownLabel
+% StationListDropDownLabel = uicontrol( StationREFUIFigure,'Style','text','Position',[19 144 100 22],'HorizontalAlignment','right',...
+%     'FontSize',9,'String','Reference station:');
+
+% % c) Create FiltertypeDropDown
+% Nelement = [1:length(data_selected)];
+% listaStazioni = {data_selected(Nelement).stn};
+% StationListDropDown = uicontrol(StationREFUIFigure,'Style','popupmenu','FontWeight','bold','Position',[158 146 92 22],...
+%     'String',listaStazioni','Tag','StationsListDropDown');
+% 
+% b) Select azimuth
+AzimuthStepLabel = uicontrol( StationREFUIFigure,'Style','text','Position',[19 60 100 22],'HorizontalAlignment','right',...
+    'FontSize',9,'String','Azimuth step:');
+
+% c) Azimuth step edit
+AzimuthStepEdit = uicontrol(StationREFUIFigure,'Style','edit','FontWeight','bold','Position',[158 62 92 22],...
+    'String','5','Tag','AzimuthStepEdit','Tooltip','Indicate the azimuth resolution. Es. % 5Hz: data will be stacked every 5 degrees');
+
+% % d) Create TextArea
+% TextArea = uicontrol(StationREFUIFigure,'Style','text','FontSize',6.8,'HorizontalAlignment','Left','FontAngle','italic','Position',[19 10 230 100],...
+%     'String',['Help: Select.']);
+
+% e)Create ComputeButton
+ComputeButton = uicontrol(StationREFUIFigure, 'Style','pushbutton','String','Compute','Position',[100 10 91 22],...
+    'Callback', @(src,event) computeRelativeCoordinates(src,StationREFUIFigure,AzimuthStepEdit));
+uiwait(StationREFUIFigure);
+end
+
+% Eseguo il calcolo delle coordinate in funzione della stazione scelta in precedenza
+function computeRelativeCoordinates(src,StationREFUIFigure,AzimuthStepEdit)
+global MASW
+
+AzimuthStep = str2num(AzimuthStepEdit.String);
+MASW.AzimuthStep = AzimuthStep;
+close(StationREFUIFigure);
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
