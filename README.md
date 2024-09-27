@@ -5,7 +5,7 @@
 - 📫 How to reach me: marco.taruselli@gmail.com
 - ⚡ Fun fact: I am Italian!
 
-<!---
-marcotaruselli/marcotaruselli is a ✨ special ✨ repository because its `README.md` (this file) appears on your GitHub profile.
-You can click the Preview link to take a look at your changes.
---->
+Please cite my phd thesis if you use this code! Hope it's helpful and you can improve it!
+
+https://orcid.org/0000-0002-9479-6331
+My Phd thesis: https://www.politesi.polimi.it/handle/10589/179042?mode=complete
